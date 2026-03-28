@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Notification;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Carbon;
@@ -13,6 +14,40 @@ class NotificationsController extends Controller
     public function index(Request $request)
     {
         $logs = Notification::orderByDesc('created_at')->limit(500)->get();
+
+        $logs->transform(function ($log) {
+            if (! empty($log->user_name) || empty($log->user_id)) {
+                return $log;
+            }
+
+            $user = User::where('vKod', $log->user_id)->first();
+            if (! $user) {
+                return $log;
+            }
+
+            $resolvedName = null;
+            if (! empty($user->name)) {
+                $resolvedName = (string) $user->name;
+            } elseif (! empty($user->felhasznalonev)) {
+                $resolvedName = (string) $user->felhasznalonev;
+            } else {
+                $fullName = trim(($user->vez_nev ?? '').' '.($user->ker_nev ?? ''));
+                if ($fullName !== '') {
+                    $resolvedName = $fullName;
+                } elseif (! empty($user->username)) {
+                    $resolvedName = (string) $user->username;
+                } elseif (! empty($user->email)) {
+                    $resolvedName = (string) $user->email;
+                }
+            }
+
+            if ($resolvedName) {
+                $log->user_name = $resolvedName;
+            }
+
+            return $log;
+        });
+
         return response()->json($logs);
     }
 

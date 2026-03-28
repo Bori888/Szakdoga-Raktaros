@@ -36,6 +36,27 @@ api.interceptors.request.use((config) => {
       // ignore
     }
   }
+
+  try {
+    const rawUser = localStorage.getItem("auth_user");
+    if (rawUser) {
+      const parsedUser = JSON.parse(rawUser);
+      const actorName =
+        parsedUser?.felhasznalonev ||
+        [parsedUser?.vez_nev, parsedUser?.ker_nev].filter(Boolean).join(" ") ||
+        parsedUser?.name ||
+        parsedUser?.email ||
+        "";
+
+      if (actorName) {
+        config.headers = config.headers || {};
+        config.headers["X-Actor-Name"] = actorName;
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
   return config;
 });
 

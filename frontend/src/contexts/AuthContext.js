@@ -94,6 +94,7 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await myAxios.get("/api/user");
       setUser(data);
+      localStorage.setItem('auth_user', JSON.stringify(data));
       return data;
     } catch (error) {
       const status = error?.response?.status;
@@ -138,6 +139,7 @@ export function AuthProvider({ children }) {
 
         if (data && data.user) {
           setUser(data.user);
+          localStorage.setItem('auth_user', JSON.stringify(data.user));
         } else {
           await getUser();
         }
@@ -240,6 +242,7 @@ export function AuthProvider({ children }) {
       }
 
       localStorage.removeItem('token');
+      localStorage.removeItem('auth_user');
       delete myAxios.defaults.headers.common['Authorization'];
       setUser(null);
       return true;
