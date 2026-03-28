@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getMovements, moveItem, subscribeStore } from "./warehouseStore";
 import { fetchActiveItems } from "../api/items";
+import api from "../api/axios";
 
 function formatDate(iso) {
   return new Date(iso).toLocaleString("hu-HU");
@@ -21,6 +22,23 @@ export default function Movement() {
   const [form, setForm] = useState({ cikk_szam: "", mennyiseg: "", from: "", to: "", megjegyzes: "" });
   const [uzenet, setUzenet] = useState("");
   const [selectedProduct, setSelectedProduct] = useState("");
+
+  const locationOptions = useMemo(() => {
+    const set = new Set(["Átvétel", "Komissiózó", "Csomagolás"]);
+    items.forEach((it) => {
+      if (it?.raktarhely) set.add(it.raktarhely);
+    });
+    return Array.from(set);
+  }, [items]);
+
+  const moveHints = useMemo(() => {
+    return [
+      "Átvétel -> R1..R6 sorok (újonnan beérkezett termék).",
+      "Raktári hely -> másik raktári hely (átpakolás sor/oszlop között).",
+      "Raktári hely -> Komissiózó (összekészítés).",
+      "Komissiózó -> Csomagolás (kiszállítás előkészítés).",
+    ];
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -50,14 +68,45 @@ export default function Movement() {
     return rows.filter((r) => r.tipus === typeFilter);
   }, [rows, typeFilter]);
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
+
+    const payload = {
+      cikk_szam: selectedProduct || form.cikk_szam,
+      mennyiseg: Number(form.mennyiseg || 0),
+      from: form.from,
+      to: form.to,
+      megjegyzes: form.megjegyzes,
+    };
+
+    if (!payload.cikk_szam) {
+      setUzenet("Hiba: válassz terméket a mozgatáshoz.");
+      return;
+    }
+
     try {
-      moveItem(form);
+      await api.post(`/api/items/${payload.cikk_szam}/move`, {
+        quantity: payload.mennyiseg,
+        from: payload.from,
+        to: payload.to,
+        note: payload.megjegyzes,
+      });
+
+      const rawUser = localStorage.getItem("auth_user");
+      const user = rawUser ? JSON.parse(rawUser) : null;
+      const actor = user?.felhasznalonev || user?.name || user?.email || "raktaros";
+
+      moveItem({
+        ...payload,
+        user: actor,
+      });
+
       setUzenet("A raktármozgás rögzítve.");
+      alert("A raktármozgás sikeres.");
       setForm({ cikk_szam: "", mennyiseg: "", from: "", to: "", megjegyzes: "" });
+      setSelectedProduct("");
     } catch (error) {
-      setUzenet(`Hiba: ${error.message}`);
+      setUzenet(`Hiba: ${error?.response?.data?.message || error.message}`);
     }
   }
 
@@ -71,7 +120,16 @@ export default function Movement() {
           <select
             className="form-select"
             value={selectedProduct}
-            onChange={(e) => setSelectedProduct(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setSelectedProduct(value);
+              const selected = items.find((it) => String(it.cikk_szam) === String(value));
+              setForm((prev) => ({
+                ...prev,
+                cikk_szam: value,
+                from: selected?.raktarhely || prev.from,
+              }));
+            }}
           >
             <option value="">Példa: válassz terméket</option>
             {items.map(it => (
@@ -93,22 +151,38 @@ export default function Movement() {
         </div>
         <div className="col-md-3">
           <label className="form-label">Honnan</label>
-          <input
-            className="form-control"
+          <select
+            className="form-select"
             value={form.from}
             onChange={(e) => setForm((prev) => ({ ...prev, from: e.target.value }))}
-            placeholder="Példa: A-01-03"
-          />
+          >
+            <option value="">Válassz forrás helyet</option>
+            {locationOptions.map((loc) => (
+              <option key={loc} value={loc}>{loc}</option>
+            ))}
+          </select>
         </div>
         <div className="col-md-3">
           <label className="form-label">Hova</label>
-          <input
-            className="form-control"
+          <select
+            className="form-select"
             value={form.to}
             onChange={(e) => setForm((prev) => ({ ...prev, to: e.target.value }))}
-            placeholder="Példa: B-02-01"
             required
-          />
+          >
+            <option value="">Válassz cél helyet</option>
+            {locationOptions.map((loc) => (
+              <option key={loc} value={loc}>{loc}</option>
+            ))}
+          </select>
+        </div>
+        <div className="col-12">
+          <div className="small text-muted mb-1">Lehetséges raktármozgás útvonalak:</div>
+          <ul className="small mb-0">
+            {moveHints.map((hint) => (
+              <li key={hint}>{hint}</li>
+            ))}
+          </ul>
         </div>
         <div className="col-md-8">
           <label className="form-label">Megjegyzés</label>

@@ -11,6 +11,7 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\ValidationException;
 use App\Models\Notification;
 
 class ItemController extends Controller
@@ -18,7 +19,50 @@ class ItemController extends Controller
     // Lista lekérése
     public function index()
     {
-        return response()->json(Item::all());
+        $items = Item::all();
+        $hasRackColumn = Schema::hasColumn('items', 'raktarhely');
+
+        // Backfill missing categories for existing records and return normalized data.
+        $items->each(function ($item) use ($hasRackColumn) {
+            $needsSave = false;
+
+            if (! empty($item->kategoria)) {
+                // category already set
+            } else {
+                $item->kategoria = $this->inferCategoryFromName($item->elnevezes);
+                $needsSave = true;
+            }
+
+            if ($hasRackColumn && empty($item->raktarhely)) {
+                $item->raktarhely = $this->inferRackLocationForItem($item);
+                $needsSave = true;
+            }
+
+            if (! $needsSave) {
+                return;
+            }
+
+            try {
+                $item->save();
+            } catch (\Throwable $e) {
+                Log::warning('Item backfill failed', [
+                    'cikk_szam' => $item->cikk_szam ?? null,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        });
+
+        // If the DB column does not exist, still provide a computed rack code in API response.
+        if (! $hasRackColumn) {
+            $items->transform(function ($item) {
+                if (empty($item->raktarhely)) {
+                    $item->setAttribute('raktarhely', $this->inferRackLocationForItem($item));
+                }
+                return $item;
+            });
+        }
+
+        return response()->json($items);
     }
 
     // Új tétel létrehozása
@@ -29,6 +73,8 @@ class ItemController extends Controller
                 'elnevezes' => ['required', 'string', 'max:50'],
                 'akt_keszlet' => ['required', 'integer', 'min:0'],
                 'egyseg_ar' => ['required', 'numeric', 'min:0'],
+                'kategoria' => ['nullable', 'string', 'max:50'],
+                'raktarhely' => ['nullable', 'string', 'max:20'],
                 'kep_url' => [
                     'nullable',
                     'string',
@@ -48,6 +94,18 @@ class ItemController extends Controller
                 $data['kep_url'] = $this->storeOptimizedImage($request->file('kep_file'));
             }
 
+            if (empty($data['kategoria'])) {
+                $data['kategoria'] = $this->inferCategoryFromName($data['elnevezes'] ?? '');
+            }
+
+            if (empty($data['raktarhely'])) {
+                $data['raktarhely'] = $this->inferRackLocationFromValues($data['kategoria'], $data['cikk_szam'] ?? null, $data['elnevezes'] ?? '');
+            }
+
+            if (! Schema::hasColumn('items', 'raktarhely')) {
+                unset($data['raktarhely']);
+            }
+
             // egyszerű létrehozás: bemenetet átmásoljuk (feltételezve, hogy a modell $fillable be van állítva)
             $item = Item::create($data);
 
@@ -60,13 +118,19 @@ class ItemController extends Controller
                     'item_name' => $item->elnevezes ?? null,
                     'quantity' => $item->akt_keszlet ?? null,
                     'user_id' => Auth::id(),
-                    'user_name' => Auth::user() ? Auth::user()->name : null,
+                    'user_name' => $this->resolveActorName(),
+                    'note' => $request->input('note') ?: $request->input('megjegyzes'),
                 ]);
             } catch (\Throwable $e) {
                 Log::warning('Notification create failed for create', ['error' => $e->getMessage()]);
             }
 
             return response()->json($item, Response::HTTP_CREATED);
+        } catch (ValidationException $exception) {
+            return response()->json([
+                'message' => collect($exception->errors())->flatten()->first() ?? 'Érvénytelen adatok.',
+                'errors' => $exception->errors(),
+            ], 422);
         } catch (\Throwable $exception) {
             Log::error('Item create failed', [
                 'message' => $exception->getMessage(),
@@ -105,6 +169,8 @@ class ItemController extends Controller
             'elnevezes' => ['sometimes', 'required', 'string', 'max:50'],
             'akt_keszlet' => ['sometimes', 'required', 'integer', 'min:0'],
             'egyseg_ar' => ['sometimes', 'required', 'numeric', 'min:0'],
+            'kategoria' => ['nullable', 'string', 'max:50'],
+            'raktarhely' => ['nullable', 'string', 'max:20'],
             'kep_url' => [
                 'nullable',
                 'string',
@@ -129,7 +195,33 @@ class ItemController extends Controller
             $data['kep_url'] = $this->storeOptimizedImage($request->file('kep_file'));
         }
 
+        if (! Schema::hasColumn('items', 'raktarhely')) {
+            unset($data['raktarhely']);
+        }
+
+        $oldStock = $item->akt_keszlet;
+
         $item->update($data);
+
+        // activity log for stock change (bevételezés)
+        if (array_key_exists('akt_keszlet', $data)) {
+            try {
+                $newStock = (int) $item->akt_keszlet;
+                $qty = $newStock - (int) ($oldStock ?? 0);
+                Notification::create([
+                    'type' => 'bevetelez',
+                    'message' => sprintf('A(z) "%s" termék készlete módosult: %d → %d (változás: %+d).', $item->elnevezes, $oldStock, $newStock, $qty),
+                    'item_id' => $item->id ?? null,
+                    'item_name' => $item->elnevezes ?? null,
+                    'quantity' => $qty,
+                    'user_id' => Auth::id(),
+                    'user_name' => $this->resolveActorName(),
+                    'note' => $request->input('note') ?: $request->input('megjegyzes'),
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning('Notification create failed for update', ['error' => $e->getMessage()]);
+            }
+        }
 
         return response()->json($item);
     }
@@ -157,7 +249,7 @@ class ItemController extends Controller
                 'item_id' => $item->id ?? null,
                 'item_name' => $item->elnevezes ?? null,
                 'user_id' => Auth::id(),
-                'user_name' => Auth::user() ? Auth::user()->name : null,
+                'user_name' => $this->resolveActorName(),
             ]);
         } catch (\Throwable $e) {
             Log::warning('Notification create failed for delete', ['error' => $e->getMessage()]);
@@ -236,7 +328,7 @@ class ItemController extends Controller
                     'item_name' => $item->elnevezes ?? null,
                     'quantity' => $qty,
                     'user_id' => Auth::id(),
-                    'user_name' => Auth::user() ? Auth::user()->name : null,
+                    'user_name' => $this->resolveActorName(),
                     'reason' => $data['reason'] ?? null,
                     'note' => $data['note'] ?? null,
                 ]);
@@ -253,6 +345,66 @@ class ItemController extends Controller
             $message = config('app.debug') ? $e->getMessage() : 'Kiadás során hiba történt.';
             return response()->json(['message' => $message], 500);
         }
+    }
+
+    // Raktármozgás: termék raktárhelyének módosítása és értesítés naplózása
+    public function move(Request $request, $id)
+    {
+        $data = $request->validate([
+            'quantity' => ['required', 'integer', 'min:1'],
+            'from' => ['nullable', 'string', 'max:20'],
+            'to' => ['required', 'string', 'max:20'],
+            'note' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $item = $this->findItemByIdOrCikk($id);
+        if (! $item) {
+            return response()->json(['message' => 'A megadott cikkszámú termék nem található.'], Response::HTTP_NOT_FOUND);
+        }
+
+        $qty = (int) $data['quantity'];
+        if ($qty > (int) ($item->akt_keszlet ?? 0)) {
+            return response()->json(['message' => 'A mozgatott mennyiség nem lehet több az aktuális készletnél.'], 422);
+        }
+
+        $from = $data['from'] ?: ($item->raktarhely ?: $this->inferRackLocationForItem($item));
+        $to = trim((string) $data['to']);
+
+        if ($to === $from) {
+            return response()->json(['message' => 'A forrás és cél raktárhely nem lehet azonos.'], 422);
+        }
+
+        if (Schema::hasColumn('items', 'raktarhely')) {
+            $item->raktarhely = $to;
+            $item->save();
+        }
+
+        try {
+            Notification::create([
+                'type' => 'movement',
+                'message' => sprintf('Raktármozgás: "%s" (%d db) %s -> %s.', $item->elnevezes, $qty, $from, $to),
+                'item_id' => $item->id ?? null,
+                'item_name' => $item->elnevezes ?? null,
+                'quantity' => $qty,
+                'user_id' => Auth::id(),
+                'user_name' => $this->resolveActorName(),
+                'reason' => 'Raktármozgás',
+                'note' => $data['note'] ?? null,
+                'data' => ['from' => $from, 'to' => $to],
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('Notification create failed for movement', ['error' => $e->getMessage()]);
+        }
+
+        return response()->json([
+            'message' => 'A raktármozgás sikeresen rögzítve.',
+            'item' => $item,
+            'movement' => [
+                'from' => $from,
+                'to' => $to,
+                'quantity' => $qty,
+            ],
+        ]);
     }
 
     private function storeOptimizedImage($file): string
@@ -372,6 +524,105 @@ class ItemController extends Controller
         } catch (\Throwable $exception) {
             return $storeOriginal();
         }
+    }
+
+    private function resolveActorName(): ?string
+    {
+        $user = Auth::user();
+        if (! $user) {
+            $headerName = trim((string) request()->header('X-Actor-Name', ''));
+            return $headerName !== '' ? $headerName : null;
+        }
+
+        if (! empty($user->name)) {
+            return (string) $user->name;
+        }
+
+        if (! empty($user->felhasznalonev)) {
+            return (string) $user->felhasznalonev;
+        }
+
+        $fullName = trim(($user->vez_nev ?? '').' '.($user->ker_nev ?? ''));
+        if ($fullName !== '') {
+            return $fullName;
+        }
+
+        if (! empty($user->username)) {
+            return (string) $user->username;
+        }
+
+        if (! empty($user->email)) {
+            return (string) $user->email;
+        }
+
+        $headerName = trim((string) request()->header('X-Actor-Name', ''));
+        return $headerName !== '' ? $headerName : null;
+    }
+
+    private function inferCategoryFromName(?string $name): string
+    {
+        $value = Str::lower((string) ($name ?? ''));
+
+        if ($value === '') {
+            return 'Egyéb';
+        }
+
+        if (str_contains($value, 'fonal')) {
+            return 'Fonalak';
+        }
+
+        if (str_contains($value, 'horgol') || str_contains($value, 'minta')) {
+            return 'Horgolóminták';
+        }
+
+        if (str_contains($value, 'plüss') || str_contains($value, 'pluss')) {
+            return 'Plüssök';
+        }
+
+        if (str_contains($value, 'szem') || str_contains($value, 'gomb') || str_contains($value, 'cipz') || str_contains($value, 'kieg')) {
+            return 'Kiegészítők';
+        }
+
+        if (str_contains($value, 'készlet') || str_contains($value, 'keszlet') || str_contains($value, 'doboz') || str_contains($value, 'horgolotu') || str_contains($value, 'tarto') || str_contains($value, 'kosar') || str_contains($value, 'eszk')) {
+            return 'Eszközök';
+        }
+
+        return 'Egyéb';
+    }
+
+    private function inferRackLocationForItem(Item $item): string
+    {
+        return $this->inferRackLocationFromValues(
+            $item->kategoria ?: $this->inferCategoryFromName($item->elnevezes),
+            $item->cikk_szam ?? null,
+            $item->elnevezes ?? ''
+        );
+    }
+
+    private function inferRackLocationFromValues(?string $category, $sku, ?string $name): string
+    {
+        $rowMap = [
+            'Fonalak' => 'R1',
+            'Eszközök' => 'R2',
+            'Kiegészítők' => 'R3',
+            'Plüssök' => 'R4',
+            'Horgolóminták' => 'R5',
+            'Egyéb' => 'R6',
+        ];
+
+        $cat = $category ?: 'Egyéb';
+        $row = $rowMap[$cat] ?? 'R6';
+
+        $seed = preg_replace('/\D+/', '', (string) ($sku ?? ''));
+        if ($seed === '') {
+            $seed = (string) abs(crc32((string) ($name ?? 'item')));
+        }
+
+        $num = (int) $seed;
+        $col = ($num % 8) + 1;
+        $shelf = ((int) floor($num / 8) % 5) + 1;
+
+        return sprintf('%s-O%02d-P%02d', $row, $col, $shelf);
     }
 
     private function extractPublicStoragePath(?string $url): ?string

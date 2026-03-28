@@ -120,4 +120,5 @@ Route::apiResource('items', ItemController::class);
 
 // Release endpoint: csökkenti a termék készletét
 Route::post('items/{id}/release', [ItemController::class, 'release']);
+Route::post('items/{id}/move', [ItemController::class, 'move']);
 Route::get('notifications', [\App\Http\Controllers\NotificationsController::class, 'index']);
