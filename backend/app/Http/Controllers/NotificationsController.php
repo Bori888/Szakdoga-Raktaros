@@ -13,7 +13,11 @@ class NotificationsController extends Controller
     // List recent notifications
     public function index(Request $request)
     {
-        $logs = Notification::orderByDesc('created_at')->limit(500)->get();
+        $logs = Notification::query()
+            ->with(['item', 'inventory'])
+            ->orderByDesc('created_at')
+            ->limit(500)
+            ->get();
 
         $logs->transform(function ($log) {
             if (! empty($log->user_name) || empty($log->user_id)) {
@@ -45,6 +49,14 @@ class NotificationsController extends Controller
                 $log->user_name = $resolvedName;
             }
 
+            if (empty($log->item_name) && ! empty($log->item?->elnevezes)) {
+                $log->item_name = (string) $log->item->elnevezes;
+            }
+
+            if (! empty($log->inventory?->code)) {
+                $log->setAttribute('inventory_code', $log->inventory->code);
+            }
+
             return $log;
         });
 
@@ -62,7 +74,7 @@ class NotificationsController extends Controller
     // Create a new notification (used by backend events)
     public function store(Request $request)
     {
-        $data = $request->only(['type','message','item_id','item_name','quantity','user_id','user_name','reason','note','data']);
+        $data = $request->only(['type','message','item_id','inventory_id','item_name','quantity','user_id','user_name','reason','note','data']);
         $notif = Notification::create($data);
         return response()->json($notif, 201);
     }
@@ -72,7 +84,7 @@ class NotificationsController extends Controller
     {
         $n = Notification::find($id);
         if (! $n) return response()->json(['message' => 'Not found'], 404);
-        $n->fill($request->only(['type','message','note','reason','read_at','data']));
+        $n->fill($request->only(['type','message','item_id','inventory_id','item_name','quantity','note','reason','read_at','data']));
         $n->save();
         return response()->json($n);
     }

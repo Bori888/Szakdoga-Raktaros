@@ -144,8 +144,16 @@ export function AuthProvider({ children }) {
           await getUser();
         }
 
+        const loggedInUser = data?.user || JSON.parse(localStorage.getItem('auth_user') || 'null');
+
         // If user is admin, redirect to admin area; otherwise go to homepage
-        const isAdmin = user && (user.is_admin || user.role === 'admin' || (user.email && user.email.endsWith('@admin.hu')));
+        const isAdmin = Boolean(
+          loggedInUser && (
+            loggedInUser.is_admin ||
+            loggedInUser.role === 'admin' ||
+            (loggedInUser.email && loggedInUser.email.endsWith('@admin.hu'))
+          )
+        );
         if (isAdmin) {
           navigate('/admin/home');
         } else {
@@ -258,11 +266,14 @@ export function AuthProvider({ children }) {
       const token = localStorage.getItem('token');
 
       try {
-        if (token) {
-          myAxios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        } else {
+        if (!token) {
+          localStorage.removeItem('token');
           delete myAxios.defaults.headers.common['Authorization'];
+          setUser(null);
+          return;
         }
+
+        myAxios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
         await getUser();
       } catch (error) {

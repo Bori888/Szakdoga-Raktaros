@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\ItemController;
+use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\ShopController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
@@ -112,7 +113,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
 });
 
 // Public webshop products
-Route::get('/items', [ItemController::class, 'index']);
+Route::get('/items', [ItemController::class, 'index'])->withoutMiddleware(['auth:sanctum']);
 Route::get('/users', [UserController::class, 'index']);
 
 // Ha még nincs regisztrálva az items erőforrás, regisztráljuk itt
@@ -121,4 +122,9 @@ Route::apiResource('items', ItemController::class);
 // Release endpoint: csökkenti a termék készletét
 Route::post('items/{id}/release', [ItemController::class, 'release']);
 Route::post('items/{id}/move', [ItemController::class, 'move']);
+Route::get('inventories', [InventoryController::class, 'index']);
+Route::post('inventories', [InventoryController::class, 'store']);
+Route::get('inventories/{id}', [InventoryController::class, 'show']);
+Route::post('inventories/{id}/items/{itemId}', [InventoryController::class, 'saveLine']);
+Route::post('inventories/{id}/close', [InventoryController::class, 'close']);
 Route::get('notifications', [\App\Http\Controllers\NotificationsController::class, 'index']);

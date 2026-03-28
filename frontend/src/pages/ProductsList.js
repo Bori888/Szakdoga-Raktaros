@@ -34,7 +34,8 @@ export default function ProductsList() {
       if (e?.response?.status === 401) {
         setError("A terméklista megtekintéséhez be kell jelentkezni.");
       } else {
-        setError("A terméklista betöltése sikertelen.");
+        const backendMessage = e?.response?.data?.message;
+        setError(backendMessage || "A terméklista betöltése sikertelen.");
       }
       setItems([]);
     } finally {

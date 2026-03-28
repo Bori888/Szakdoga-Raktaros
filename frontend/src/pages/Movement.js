@@ -19,9 +19,11 @@ export default function Movement() {
   const [items, setItems] = useState([]);
   const [rows, setRows] = useState([]);
   const [typeFilter, setTypeFilter] = useState("mind");
-  const [form, setForm] = useState({ cikk_szam: "", mennyiseg: "", from: "", to: "", megjegyzes: "" });
+  const [form, setForm] = useState({ cikk_szam: "", from: "", to: "", megjegyzes: "" });
   const [uzenet, setUzenet] = useState("");
   const [selectedProduct, setSelectedProduct] = useState("");
+
+  const getItemKey = (it) => String(it?.cikk_szam ?? it?.id ?? "");
 
   const locationOptions = useMemo(() => {
     const set = new Set(["Átvétel", "Komissiózó", "Csomagolás"]);
@@ -31,14 +33,14 @@ export default function Movement() {
     return Array.from(set);
   }, [items]);
 
-  const moveHints = useMemo(() => {
-    return [
-      "Átvétel -> R1..R6 sorok (újonnan beérkezett termék).",
-      "Raktári hely -> másik raktári hely (átpakolás sor/oszlop között).",
-      "Raktári hely -> Komissiózó (összekészítés).",
-      "Komissiózó -> Csomagolás (kiszállítás előkészítés).",
-    ];
-  }, []);
+  const selectedItem = useMemo(() => {
+    return items.find((it) => getItemKey(it) === String(selectedProduct)) || null;
+  }, [items, selectedProduct]);
+
+  const destinationOptions = useMemo(() => {
+    const currentFrom = form.from || selectedItem?.raktarhely || "";
+    return locationOptions.filter((loc) => loc !== currentFrom);
+  }, [locationOptions, form.from, selectedItem]);
 
   useEffect(() => {
     let mounted = true;
@@ -73,8 +75,7 @@ export default function Movement() {
 
     const payload = {
       cikk_szam: selectedProduct || form.cikk_szam,
-      mennyiseg: Number(form.mennyiseg || 0),
-      from: form.from,
+      from: form.from || selectedItem?.raktarhely || "",
       to: form.to,
       megjegyzes: form.megjegyzes,
     };
@@ -84,9 +85,18 @@ export default function Movement() {
       return;
     }
 
+    if (!payload.from) {
+      setUzenet("Hiba: a termékhez nem található forrás raktárhely.");
+      return;
+    }
+
+    if (payload.from === payload.to) {
+      setUzenet("Hiba: a Honnan és Hova érték nem lehet azonos.");
+      return;
+    }
+
     try {
       await api.post(`/api/items/${payload.cikk_szam}/move`, {
-        quantity: payload.mennyiseg,
         from: payload.from,
         to: payload.to,
         note: payload.megjegyzes,
@@ -96,14 +106,20 @@ export default function Movement() {
       const user = rawUser ? JSON.parse(rawUser) : null;
       const actor = user?.felhasznalonev || user?.name || user?.email || "raktaros";
 
-      moveItem({
-        ...payload,
-        user: actor,
-      });
+      // Keep local demo movement table in sync when possible, but do not fail UI if local store differs.
+      try {
+        moveItem({
+          ...payload,
+          mennyiseg: Number(selectedItem?.akt_keszlet || 0),
+          user: actor,
+        });
+      } catch (localError) {
+        console.warn("Local movement store sync skipped:", localError?.message || localError);
+      }
 
       setUzenet("A raktármozgás rögzítve.");
       alert("A raktármozgás sikeres.");
-      setForm({ cikk_szam: "", mennyiseg: "", from: "", to: "", megjegyzes: "" });
+      setForm({ cikk_szam: "", from: "", to: "", megjegyzes: "" });
       setSelectedProduct("");
     } catch (error) {
       setUzenet(`Hiba: ${error?.response?.data?.message || error.message}`);
@@ -123,44 +139,29 @@ export default function Movement() {
             onChange={(e) => {
               const value = e.target.value;
               setSelectedProduct(value);
-              const selected = items.find((it) => String(it.cikk_szam) === String(value));
+              const selected = items.find((it) => getItemKey(it) === String(value));
               setForm((prev) => ({
                 ...prev,
                 cikk_szam: value,
-                from: selected?.raktarhely || prev.from,
+                from: selected?.raktarhely || "",
+                to: "",
               }));
             }}
           >
             <option value="">Példa: válassz terméket</option>
             {items.map(it => (
-              <option key={it.cikk_szam} value={it.cikk_szam}>{it.elnevezes}</option>
+              <option key={getItemKey(it)} value={getItemKey(it)}>{it.elnevezes}</option>
             ))}
           </select>
-        </div>
-        <div className="col-md-2">
-          <label className="form-label">Mennyiség</label>
-          <input
-            className="form-control"
-            type="number"
-            min="1"
-            placeholder="Példa: 10"
-            value={form.mennyiseg}
-            onChange={(e) => setForm((prev) => ({ ...prev, mennyiseg: e.target.value }))}
-            required
-          />
         </div>
         <div className="col-md-3">
           <label className="form-label">Honnan</label>
-          <select
-            className="form-select"
-            value={form.from}
-            onChange={(e) => setForm((prev) => ({ ...prev, from: e.target.value }))}
-          >
-            <option value="">Válassz forrás helyet</option>
-            {locationOptions.map((loc) => (
-              <option key={loc} value={loc}>{loc}</option>
-            ))}
-          </select>
+          <input
+            className="form-control"
+            value={form.from || selectedItem?.raktarhely || ""}
+            readOnly
+            placeholder="A termék aktuális raktárhelye"
+          />
         </div>
         <div className="col-md-3">
           <label className="form-label">Hova</label>
@@ -171,18 +172,10 @@ export default function Movement() {
             required
           >
             <option value="">Válassz cél helyet</option>
-            {locationOptions.map((loc) => (
+            {destinationOptions.map((loc) => (
               <option key={loc} value={loc}>{loc}</option>
             ))}
           </select>
-        </div>
-        <div className="col-12">
-          <div className="small text-muted mb-1">Lehetséges raktármozgás útvonalak:</div>
-          <ul className="small mb-0">
-            {moveHints.map((hint) => (
-              <li key={hint}>{hint}</li>
-            ))}
-          </ul>
         </div>
         <div className="col-md-8">
           <label className="form-label">Megjegyzés</label>
@@ -221,7 +214,6 @@ export default function Movement() {
               <th>Típus</th>
               <th>Cikkszám</th>
               <th>Termék</th>
-              <th>Mennyiség</th>
               <th>Honnan</th>
               <th>Hova</th>
               <th>Felhasználó</th>
@@ -235,7 +227,6 @@ export default function Movement() {
                 <td>{tipusCimke(r.tipus)}</td>
                 <td>{r.cikk_szam}</td>
                 <td>{r.termeknev}</td>
-                <td>{r.mennyiseg}</td>
                 <td>{r.from}</td>
                 <td>{r.to}</td>
                 <td>{r.user}</td>
@@ -244,7 +235,7 @@ export default function Movement() {
             ))}
             {!filteredRows.length && (
               <tr>
-                <td colSpan={9} className="text-center text-muted">
+                <td colSpan={8} className="text-center text-muted">
                   Nincs megjeleníthető raktári művelet.
                 </td>
               </tr>

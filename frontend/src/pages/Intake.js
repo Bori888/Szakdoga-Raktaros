@@ -109,7 +109,7 @@ export default function Intake() {
         </div>
         <div className="col-md-3">
           <label className="form-label">Raktárhely</label>
-          <input className="form-control" value={form.raktarhely} onChange={(e) => onChange("raktarhely", e.target.value)} placeholder="Példa: A-02-01" />
+          <input className="form-control" value={form.raktarhely} onChange={(e) => onChange("raktarhely", e.target.value)} placeholder="Példa: R02-O03-P01" />
         </div>
         <div className="col-md-6">
           <label className="form-label">Kép feltöltése (backend tárhely)</label>

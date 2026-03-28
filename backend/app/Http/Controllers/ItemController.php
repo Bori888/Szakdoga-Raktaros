@@ -19,50 +19,37 @@ class ItemController extends Controller
     // Lista lekérése
     public function index()
     {
-        $items = Item::all();
-        $hasRackColumn = Schema::hasColumn('items', 'raktarhely');
+        try {
+            $items = Item::query()->get();
+            $hasRackColumn = Schema::hasColumn('items', 'raktarhely');
 
-        // Backfill missing categories for existing records and return normalized data.
-        $items->each(function ($item) use ($hasRackColumn) {
-            $needsSave = false;
+            // Read-only normalization: never persist in a GET endpoint.
+            $items->transform(function ($item) use ($hasRackColumn) {
+                if (empty($item->kategoria)) {
+                    $item->setAttribute('kategoria', $this->inferCategoryFromName($item->elnevezes));
+                }
 
-            if (! empty($item->kategoria)) {
-                // category already set
-            } else {
-                $item->kategoria = $this->inferCategoryFromName($item->elnevezes);
-                $needsSave = true;
-            }
-
-            if ($hasRackColumn && empty($item->raktarhely)) {
-                $item->raktarhely = $this->inferRackLocationForItem($item);
-                $needsSave = true;
-            }
-
-            if (! $needsSave) {
-                return;
-            }
-
-            try {
-                $item->save();
-            } catch (\Throwable $e) {
-                Log::warning('Item backfill failed', [
-                    'cikk_szam' => $item->cikk_szam ?? null,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        });
-
-        // If the DB column does not exist, still provide a computed rack code in API response.
-        if (! $hasRackColumn) {
-            $items->transform(function ($item) {
-                if (empty($item->raktarhely)) {
+                if (! $hasRackColumn || empty($item->raktarhely)) {
                     $item->setAttribute('raktarhely', $this->inferRackLocationForItem($item));
                 }
+
                 return $item;
             });
-        }
 
-        return response()->json($items);
+            return response()->json($items);
+        } catch (\Throwable $e) {
+            Log::error('Item index failed', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
+            $message = config('app.debug')
+                ? $e->getMessage()
+                : 'A terméklista betöltése sikertelen.';
+
+            return response()->json(['message' => $message], 500);
+        }
     }
 
     // Új tétel létrehozása
@@ -351,7 +338,6 @@ class ItemController extends Controller
     public function move(Request $request, $id)
     {
         $data = $request->validate([
-            'quantity' => ['required', 'integer', 'min:1'],
             'from' => ['nullable', 'string', 'max:20'],
             'to' => ['required', 'string', 'max:20'],
             'note' => ['nullable', 'string', 'max:1000'],
@@ -362,10 +348,7 @@ class ItemController extends Controller
             return response()->json(['message' => 'A megadott cikkszámú termék nem található.'], Response::HTTP_NOT_FOUND);
         }
 
-        $qty = (int) $data['quantity'];
-        if ($qty > (int) ($item->akt_keszlet ?? 0)) {
-            return response()->json(['message' => 'A mozgatott mennyiség nem lehet több az aktuális készletnél.'], 422);
-        }
+        $qty = (int) ($item->akt_keszlet ?? 0);
 
         $from = $data['from'] ?: ($item->raktarhely ?: $this->inferRackLocationForItem($item));
         $to = trim((string) $data['to']);
@@ -402,7 +385,6 @@ class ItemController extends Controller
             'movement' => [
                 'from' => $from,
                 'to' => $to,
-                'quantity' => $qty,
             ],
         ]);
     }
@@ -644,6 +626,11 @@ class ItemController extends Controller
     private function findItemByIdOrCikk($id)
     {
         $query = Item::where('cikk_szam', $id);
+
+        if (is_string($id) && $id !== '') {
+            $query->orWhereRaw('LOWER(cikk_szam) = ?', [Str::lower($id)]);
+        }
+
         if (Schema::hasColumn('items', 'id')) {
             $query->orWhere('id', $id);
         }

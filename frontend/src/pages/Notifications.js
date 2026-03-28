@@ -9,6 +9,9 @@ const TYPE_LABELS = {
   release: 'Kiadás',
   movement: 'Raktármozgás',
   rendeles: 'Rendelés',
+  inventory_start: 'Leltár indítása',
+  inventory_count: 'Leltár rögzítés',
+  inventory_close: 'Leltár lezárás',
 };
 
 function muvelCimke(r) {
@@ -69,7 +72,10 @@ export default function Notifications() {
                     {new Date(r.created_at).toLocaleString('hu-HU')}
                   </td>
                   <td>{muvelCimke(r)}</td>
-                  <td>{r.item_name || (r.item_id ? `#${r.item_id}` : '-')}</td>
+                  <td>
+                    {r.item_name || (r.item_id ? `#${r.item_id}` : '-')}
+                    {r.inventory_code ? <div className="small text-muted">{r.inventory_code}</div> : null}
+                  </td>
                   <td>{r.quantity !== null && r.quantity !== undefined ? r.quantity : '-'}</td>
                   <td>{r.user_name || (r.user_id ? `#${r.user_id}` : '-')}</td>
                   <td>{r.note || '-'}</td>

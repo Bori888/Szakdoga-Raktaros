@@ -1,8 +1,24 @@
-import api from './axios';
+import api, { publicAxios } from './axios';
 
 export async function fetchActiveItems() {
-  const resp = await api.get('/api/items');
-  const items = Array.isArray(resp.data) ? resp.data : [];
+  let resp;
+
+  try {
+    // Warehouse UI should prefer authenticated endpoint.
+    resp = await api.get('/api/raktar/products');
+  } catch (authError) {
+    const authStatus = authError?.response?.status;
+
+    // If auth endpoint is not available for current user/session,
+    // fallback to public products endpoint.
+    if (authStatus === 401 || authStatus === 403 || authStatus === 404) {
+      resp = await publicAxios.get('/api/items');
+    } else {
+      throw authError;
+    }
+  }
+
+  const items = Array.isArray(resp?.data) ? resp.data : [];
 
   // Sort by product name (elnevezes) alphabetically (Hungarian locale if available)
   items.sort((a, b) => {
