@@ -28,6 +28,9 @@ export default function Intake() {
       payload.append("elnevezes", form.elnevezes);
       payload.append("akt_keszlet", String(Number(form.mennyiseg || 0)));
       payload.append("egyseg_ar", String(Number(form.eladasi_ar || 0)));
+      payload.append("kategoria", form.kategoria || "Egyéb");
+      if (form.raktarhely) payload.append("raktarhely", form.raktarhely);
+      if (form.megjegyzes) payload.append("note", form.megjegyzes);
 
       const trimmedUrl = (form.kep_url || "").trim();
 
@@ -83,7 +86,7 @@ export default function Intake() {
         </div>
         <div className="col-md-5">
           <label className="form-label">Terméknév</label>
-          <input className="form-control" placeholder="Példa: Prémium pamut fonal 100 g" value={form.elnevezes} onChange={(e) => onChange("elnevezes", e.target.value)} required />
+          <input className="form-control" maxLength={50} placeholder="Példa: Prémium pamut fonal 100 g" value={form.elnevezes} onChange={(e) => onChange("elnevezes", e.target.value)} required />
         </div>
         <div className="col-md-2">
           <label className="form-label">Mennyiség</label>

@@ -43,6 +43,8 @@ export default function ProductsList() {
   };
 
   const categories = useMemo(() => {
+    const requiredCategories = ["Fonalak", "Eszközök", "Kiegészítők", "Plüssök", "Horgolóminták", "Egyéb"];
+
     const getCat = (it) => {
       if (!it) return '';
       return it.kategoria ?? it.category ?? it.kategori ?? it.cat ?? it.category_name ?? '';
@@ -50,6 +52,7 @@ export default function ProductsList() {
 
     const set = new Set();
     set.add('mind');
+    requiredCategories.forEach((c) => set.add(c));
     items.forEach((it) => {
       const c = getCat(it) || 'Egyéb';
       set.add(c);
@@ -144,6 +147,13 @@ export default function ProductsList() {
         <Link className="btn btn-primary warehouse-btn" to="/warehouse/intake">
           Új tétel felvétele
         </Link>
+      </div>
+
+      <div className="alert alert-secondary mb-3" role="note">
+        <strong>Raktárhely kód magyarázat:</strong> egy raktárat használunk, a helyek
+        <span> </span><code>R{"{sor}"}-O{"{oszlop}"}-P{"{polc}"}</code><span> </span>
+        formátumban jelennek meg (példa: <code>R2-O03-P01</code>).<span> </span>
+        A rendszer minden termékhez automatikusan kioszt egy logikus helyet, ha hiányzik.
       </div>
 
       <div className="row g-2 mb-3 warehouse-filter">
