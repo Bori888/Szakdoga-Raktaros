@@ -1,6 +1,6 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { myAxios, publicAxios } from "../api/axios";
+import { myAxios } from "../api/axios";
 import { AuthContext } from "../contexts/AuthContext";
 import { fetchActiveItems } from '../api/items';
 import "./Termekek.css";
@@ -32,42 +32,11 @@ export default function Termekek() {
     setMessage(null);
 
     try {
-      // Try public endpoint first without credentials
-      const alt = await fetch("http://localhost:8000/api/items-public", {
-        headers: { Accept: "application/json" },
-      });
-      if (alt.ok) {
-        const data = await alt.json();
-        setProducts((data || []).map(mapBackendProduct));
-        setLoading(false);
-        return;
-      }
-    } catch (e) {
-      // ignore and try authenticated endpoint
-    }
-
-    try {
-      // primary endpoint for items
-      const response = await publicAxios.get("/api/items");
-      const mapped = (response?.data || []).map(mapBackendProduct);
-      setProducts(mapped);
-      return;
-    } catch (publicError) {
-      // if not found or unauthorized, try a public endpoint fallback
-      if (publicError.response && (publicError.response.status === 404 || publicError.response.status === 401)) {
-        try {
-          const webFallback = await publicAxios.get("/api/items-public");
-          const mapped = (webFallback?.data || []).map(mapBackendProduct);
-          setProducts(mapped);
-          return;
-        } catch (webFallbackError) {
-          setProducts([]);
-          setMessage("A termékek most nem érhetőek el. Próbáld újra pár másodperc múlva.");
-        }
-      } else {
-        setProducts([]);
-        setMessage("A termékek most nem érhetőek el. Próbáld újra pár másodperc múlva.");
-      }
+      const list = await fetchActiveItems();
+      setProducts((list || []).map(mapBackendProduct));
+    } catch (error) {
+      setProducts([]);
+      setMessage("A termékek most nem érhetőek el. Próbáld újra pár másodperc múlva.");
     } finally {
       setLoading(false);
     }
@@ -124,24 +93,6 @@ export default function Termekek() {
       setMessage("A kosár frissítése sikertelen.");
     }
   };
-
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        const list = await fetchActiveItems();
-        if (!mounted) return;
-        setProducts((list || []).map(mapBackendProduct));
-      } catch (e) {
-        console.error('Hiba a termékek lekérésekor', e);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    load();
-    return () => { mounted = false; };
-  }, []);
 
   return (
     <section className="page products-page">

@@ -20,7 +20,7 @@ return new class extends Migration
             $table->string('kartya_stilus', 50)->nullable();
 
             // added category column
-            $table->string('kategoria')->nullable()->after('elnevezes');
+            $table->string('kategoria')->nullable();
 
             $table->timestamps();
         });

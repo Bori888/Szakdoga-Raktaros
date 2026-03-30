@@ -1,7 +1,26 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { getMovements, moveItem, subscribeStore } from "./warehouseStore";
+import { getMovements, moveItem, subscribeStore, syncItemsFromApi } from "./warehouseStore";
 import { fetchActiveItems } from "../api/items";
 import api from "../api/axios";
+
+const STATIC_LOCATIONS = ["Átvétel", "Komissiózó", "Csomagolás"];
+const RACK_ROWS = ["A", "B", "C", "D"];
+const RACK_COLUMNS = 4;
+const RACK_LEVELS = 8;
+
+function createAllRackLocations() {
+  const all = [];
+  for (const row of RACK_ROWS) {
+    for (let column = 1; column <= RACK_COLUMNS; column += 1) {
+      for (let level = 1; level <= RACK_LEVELS; level += 1) {
+        all.push(`${row}-${String(column).padStart(2, "0")}-${String(level).padStart(2, "0")}`);
+      }
+    }
+  }
+  return all;
+}
+
+const ALL_RACK_LOCATIONS = createAllRackLocations();
 
 function formatDate(iso) {
   return new Date(iso).toLocaleString("hu-HU");
@@ -21,21 +40,38 @@ export default function Movement() {
   const [typeFilter, setTypeFilter] = useState("mind");
   const [form, setForm] = useState({ cikk_szam: "", from: "", to: "", megjegyzes: "" });
   const [uzenet, setUzenet] = useState("");
+  const [uzenetTipus, setUzenetTipus] = useState("info");
   const [selectedProduct, setSelectedProduct] = useState("");
 
   const getItemKey = (it) => String(it?.cikk_szam ?? it?.id ?? "");
 
-  const locationOptions = useMemo(() => {
-    const set = new Set(["Átvétel", "Komissiózó", "Csomagolás"]);
-    items.forEach((it) => {
-      if (it?.raktarhely) set.add(it.raktarhely);
-    });
-    return Array.from(set);
-  }, [items]);
-
   const selectedItem = useMemo(() => {
     return items.find((it) => getItemKey(it) === String(selectedProduct)) || null;
   }, [items, selectedProduct]);
+
+  const locationOptions = useMemo(() => {
+    const selectedCurrent = String(selectedItem?.raktarhely || "").trim();
+    const occupied = new Set();
+    const knownLocations = new Set(STATIC_LOCATIONS);
+
+    items.forEach((it) => {
+      const loc = String(it?.raktarhely || "").trim();
+      if (!loc) return;
+      if (loc !== selectedCurrent) {
+        occupied.add(loc);
+      } else {
+        knownLocations.add(loc);
+      }
+    });
+
+    ALL_RACK_LOCATIONS.forEach((loc) => {
+      if (!occupied.has(loc) || loc === selectedCurrent) {
+        knownLocations.add(loc);
+      }
+    });
+
+    return Array.from(knownLocations);
+  }, [items, selectedItem]);
 
   const destinationOptions = useMemo(() => {
     const currentFrom = form.from || selectedItem?.raktarhely || "";
@@ -49,8 +85,12 @@ export default function Movement() {
         const list = await fetchActiveItems();
         if (!mounted) return;
         setItems(list || []);
+        syncItemsFromApi(list || []);
       } catch (e) {
         console.error("Error loading items for movement", e);
+        if (!mounted) return;
+        setUzenetTipus("error");
+        setUzenet("Hiba: a terméklista betöltése sikertelen.");
       }
     };
     load();
@@ -81,16 +121,13 @@ export default function Movement() {
     };
 
     if (!payload.cikk_szam) {
+      setUzenetTipus("error");
       setUzenet("Hiba: válassz terméket a mozgatáshoz.");
       return;
     }
 
-    if (!payload.from) {
-      setUzenet("Hiba: a termékhez nem található forrás raktárhely.");
-      return;
-    }
-
     if (payload.from === payload.to) {
+      setUzenetTipus("error");
       setUzenet("Hiba: a Honnan és Hova érték nem lehet azonos.");
       return;
     }
@@ -114,15 +151,18 @@ export default function Movement() {
           user: actor,
         });
       } catch (localError) {
-        console.warn("Local movement store sync skipped:", localError?.message || localError);
+        // Ignore local mirror mismatches: the backend move already succeeded.
       }
 
+      setUzenetTipus("success");
       setUzenet("A raktármozgás rögzítve.");
       alert("A raktármozgás sikeres.");
       setForm({ cikk_szam: "", from: "", to: "", megjegyzes: "" });
       setSelectedProduct("");
     } catch (error) {
+      setUzenetTipus("error");
       setUzenet(`Hiba: ${error?.response?.data?.message || error.message}`);
+      alert(`A raktármozgás sikertelen: ${error?.response?.data?.message || error.message}`);
     }
   }
 
@@ -193,7 +233,11 @@ export default function Movement() {
         </div>
       </form>
 
-      {uzenet && <div className="alert alert-info">{uzenet}</div>}
+      {uzenet && (
+        <div className={`alert ${uzenetTipus === "error" ? "alert-danger" : uzenetTipus === "success" ? "alert-success" : "alert-info"}`}>
+          {uzenet}
+        </div>
+      )}
 
       <div className="d-flex justify-content-between align-items-center mb-2">
         <h5 className="mb-0">Raktári műveleti napló</h5>

@@ -14,6 +14,7 @@ function stockState(item) {
 export default function ProductsList() {
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("mind");
   const [status, setStatus] = useState("mind");
@@ -28,6 +29,7 @@ export default function ProductsList() {
     try {
       setLoading(true);
       setError("");
+      setSuccess("");
       const list = await fetchActiveItems();
       setItems(list);
     } catch (e) {
@@ -122,11 +124,17 @@ export default function ProductsList() {
     if (!window.confirm(`Biztosan törölni szeretnéd a ${sku} cikkszámú tételt?`))
       return;
     try {
+      setError("");
+      setSuccess("");
       await myAxios.delete(`/api/items/${sku}`);
       // frissítsük a helyi listát
       setItems((prev) => prev.filter((item) => item.cikk_szam !== sku));
+      const msg = `A(z) ${sku} cikkszámú tétel sikeresen törölve.`;
+      setSuccess(msg);
+      alert(msg);
     } catch (e) {
-      setError("A törlés sikertelen.");
+      const backendMessage = e?.response?.data?.message;
+      setError(backendMessage || "A törlés sikertelen.");
     }
   };
 
@@ -206,6 +214,7 @@ export default function ProductsList() {
       </div>
 
       <div className="table-responsive">
+        {success && <div className="alert alert-success">{success}</div>}
         {error && <div className="alert alert-danger">{error}</div>}
         <table className="table table-striped align-middle">
           <thead>

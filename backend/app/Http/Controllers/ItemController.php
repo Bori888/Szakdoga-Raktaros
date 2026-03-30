@@ -12,44 +12,35 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Database\QueryException;
 use App\Models\Notification;
 
 class ItemController extends Controller
 {
+    private const MAX_AKT_KESZLET = 2147483647;
+
+    /** Cached Schema::hasColumn results — persists across requests within the same worker */
+    private static array $colCache = [];
+
+    private static function col(string $column): bool
+    {
+        if (! array_key_exists($column, self::$colCache)) {
+            self::$colCache[$column] = Schema::hasColumn('items', $column);
+        }
+        return self::$colCache[$column];
+    }
+
     // Lista lekérése
     public function index()
     {
-        try {
-            $items = Item::query()->get();
-            $hasRackColumn = Schema::hasColumn('items', 'raktarhely');
-
-            // Read-only normalization: never persist in a GET endpoint.
-            $items->transform(function ($item) use ($hasRackColumn) {
-                if (empty($item->kategoria)) {
-                    $item->setAttribute('kategoria', $this->inferCategoryFromName($item->elnevezes));
-                }
-
-                if (! $hasRackColumn || empty($item->raktarhely)) {
-                    $item->setAttribute('raktarhely', $this->inferRackLocationForItem($item));
-                }
-
-                return $item;
-            });
-
-            return response()->json($items);
-        } catch (\Throwable $e) {
-            Log::error('Item index failed', [
-                'error' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-            ]);
-
-            $message = config('app.debug')
-                ? $e->getMessage()
-                : 'A terméklista betöltése sikertelen.';
-
-            return response()->json(['message' => $message], 500);
+        if (self::col('raktarhely')) {
+            $nullItems = Item::whereNull('raktarhely')->orWhere('raktarhely', '')->get();
+            foreach ($nullItems as $item) {
+                $item->raktarhely = $this->inferRackLocationForItem($item);
+                $item->saveQuietly();
+            }
         }
+        return response()->json(Item::all());
     }
 
     // Új tétel létrehozása
@@ -58,7 +49,7 @@ class ItemController extends Controller
         try {
             $data = $request->validate([
                 'elnevezes' => ['required', 'string', 'max:50'],
-                'akt_keszlet' => ['required', 'integer', 'min:0'],
+                'akt_keszlet' => ['required', 'integer', 'min:0', 'max:'.self::MAX_AKT_KESZLET],
                 'egyseg_ar' => ['required', 'numeric', 'min:0'],
                 'kategoria' => ['nullable', 'string', 'max:50'],
                 'raktarhely' => ['nullable', 'string', 'max:20'],
@@ -89,7 +80,7 @@ class ItemController extends Controller
                 $data['raktarhely'] = $this->inferRackLocationFromValues($data['kategoria'], $data['cikk_szam'] ?? null, $data['elnevezes'] ?? '');
             }
 
-            if (! Schema::hasColumn('items', 'raktarhely')) {
+            if (! self::col('raktarhely')) {
                 unset($data['raktarhely']);
             }
 
@@ -118,6 +109,19 @@ class ItemController extends Controller
                 'message' => collect($exception->errors())->flatten()->first() ?? 'Érvénytelen adatok.',
                 'errors' => $exception->errors(),
             ], 422);
+        } catch (QueryException $exception) {
+            $errorMessage = (string) $exception->getMessage();
+            if ($exception->getCode() === '22003' && str_contains($errorMessage, 'akt_keszlet')) {
+                return response()->json([
+                    'message' => 'A készlet értéke túl nagy. Maximális érték: '.self::MAX_AKT_KESZLET.'.',
+                ], 422);
+            }
+
+            Log::error('Item create query failed', [
+                'message' => $errorMessage,
+            ]);
+
+            return response()->json(['message' => 'A termek mentese sikertelen.'], 500);
         } catch (\Throwable $exception) {
             Log::error('Item create failed', [
                 'message' => $exception->getMessage(),
@@ -154,7 +158,7 @@ class ItemController extends Controller
 
         $data = $request->validate([
             'elnevezes' => ['sometimes', 'required', 'string', 'max:50'],
-            'akt_keszlet' => ['sometimes', 'required', 'integer', 'min:0'],
+            'akt_keszlet' => ['sometimes', 'required', 'integer', 'min:0', 'max:'.self::MAX_AKT_KESZLET],
             'egyseg_ar' => ['sometimes', 'required', 'numeric', 'min:0'],
             'kategoria' => ['nullable', 'string', 'max:50'],
             'raktarhely' => ['nullable', 'string', 'max:20'],
@@ -182,7 +186,7 @@ class ItemController extends Controller
             $data['kep_url'] = $this->storeOptimizedImage($request->file('kep_file'));
         }
 
-        if (! Schema::hasColumn('items', 'raktarhely')) {
+        if (! self::col('raktarhely')) {
             unset($data['raktarhely']);
         }
 
@@ -249,13 +253,13 @@ class ItemController extends Controller
     {
         $selectColumns = ['id', 'cikk_szam', 'elnevezes', 'egyseg_ar'];
 
-        if (Schema::hasColumn('items', 'kep_url')) {
+        if (self::col('kep_url')) {
             $selectColumns[] = 'kep_url';
         }
-        if (Schema::hasColumn('items', 'kartya_hatterszin')) {
+        if (self::col('kartya_hatterszin')) {
             $selectColumns[] = 'kartya_hatterszin';
         }
-        if (Schema::hasColumn('items', 'kartya_stilus')) {
+        if (self::col('kartya_stilus')) {
             $selectColumns[] = 'kartya_stilus';
         }
 
@@ -357,7 +361,7 @@ class ItemController extends Controller
             return response()->json(['message' => 'A forrás és cél raktárhely nem lehet azonos.'], 422);
         }
 
-        if (Schema::hasColumn('items', 'raktarhely')) {
+        if (self::col('raktarhely')) {
             $item->raktarhely = $to;
             $item->save();
         }
@@ -631,7 +635,7 @@ class ItemController extends Controller
             $query->orWhereRaw('LOWER(cikk_szam) = ?', [Str::lower($id)]);
         }
 
-        if (Schema::hasColumn('items', 'id')) {
+        if (self::col('id')) {
             $query->orWhere('id', $id);
         }
         return $query->first();
